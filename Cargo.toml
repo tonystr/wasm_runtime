@@ -1,0 +1,18 @@
+[package]
+name = "wasm-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.98"		# Error handling
+nom = "7.1.3"			# Parser combinatior
+nom-leb128 = "0.2.0"	# Decoding LEB128 variable length code compressed numbers
+num-derive = "0.4.2"	# Convenient numeric type conversion
+num-traits = "0.2.19"	# convenient numeric type conversion
+
+[dev-dependencies]
+wat = "1.236.0"				# Compiling wasm binaries from WAT
+pretty_assertions = "1.4.1"	# Assertions for testing
+
+[package.metadata.docs.rs]
+default-theme = "ayu"

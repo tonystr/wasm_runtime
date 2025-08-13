@@ -1,0 +1,19 @@
+(module
+  (func $add (import "env" "add") (param i32) (result i32))
+  (func (export "call_add") (param i32) (result i32)
+    (local.get 0)
+    (call $add)
+  )
+)
+
+; section "Import" (2)
+0000010: 02                ; section code
+0000011: 0b                ; section size
+0000012: 01                ; num imports
+; import header 0
+0000013: 03                ; string length
+0000014: 656e 76           ; import module name (env)
+0000017: 03                ; string length
+0000018: 6164 64           ; import field name (add)
+000001b: 00                ; import kind
+000001c: 00                ; import signature index

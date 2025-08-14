@@ -1,9 +1,11 @@
+use std::mem::size_of;
 use crate::{
     binary::{instruction::Instruction, module::Module, types::{ExportDesc, ValueType}},
     execution::{
         import::Import,
         store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store},
         value::Value,
+        wasi::WasiSnapshotPreview1,
     },
 };
 use anyhow::{Result, anyhow, bail};
@@ -25,6 +27,7 @@ pub struct Runtime {
     pub stack: Vec<Value>,
     pub call_stack: Vec<Frame>,
     pub import: Import,
+    pub wasi: Option<WasiSnapshotPreview1>,
 }
 
 impl Runtime {
@@ -35,6 +38,17 @@ impl Runtime {
 
         Ok(Self {
             store,
+            ..Default::default()
+        })
+    }
+
+    pub fn instantiate_with_wasi(wasm: impl AsRef<[u8]>, wasi: WasiSnapshotPreview1) -> Result<Self> {
+        let module = Module::new(wasm.as_ref())?;
+        let store = Store::new(module)?;
+
+        Ok(Self {
+            store,
+            wasi: Some(wasi),
             ..Default::default()
         })
     }
@@ -119,6 +133,13 @@ impl Runtime {
     fn invoke_external(&mut self, func: ExternalFuncInst) -> Result<Option<Value>> {
         let args = self.stack
             .split_off(self.stack.len() - func.func_type.params.len());
+
+        if func.module == "wasi_snapshot_preview1" {
+            if let Some(wasi) = &mut self.wasi {
+                return wasi.invoke(&mut self.store, &func.func, args);
+            }
+        }
+
         let import_func = self.import
             .get_mut(&func.module)
             .ok_or(anyhow!("module not found"))?
@@ -154,6 +175,19 @@ impl Runtime {
                     };
                     frame.locals[*index as usize] = value;
                 }
+                Instruction::I32Store { align: _, offset } => {
+                    let (Some(value), Some(addr)) = (self.stack.pop(), self.stack.pop()) else {
+                        bail!("value not found in stack");
+                    };
+                    let addr = Into::<i32>::into(addr) as usize;
+                    let at = addr + *offset as usize;
+                    let end = at + size_of::<i32>();
+                    let memory = self.store.memories
+                        .get_mut(0)
+                        .ok_or(anyhow!("memory not found"))?;
+                    let value: i32 = value.into();
+                    memory.data[at..end].copy_from_slice(&value.to_le_bytes());
+                }
                 Instruction::I32Const(value) => self.stack.push(Value::I32(*value)),
                 Instruction::I32Add => {
                     let (Some(right), Some(left)) = (self.stack.pop(), self.stack.pop()) else {
@@ -182,7 +216,6 @@ impl Runtime {
                         }
                     }
                 }
-                _ => todo!(),
             }
         }
 
@@ -330,6 +363,23 @@ mod tests {
         let mut runtime = Runtime::instantiate(wasm)?;
         let result = runtime.call("local_set", vec![])?;
         assert_eq!(result, Some(Value::I32(42)));
+        Ok(())
+    }
+
+    #[test]
+    fn i32_store() -> Result<()> {
+        let wasm = wat::parse_str("(module
+            (memory 1)
+            (func $i32_store
+                (i32.const 0)
+                (i32.const 42)
+                (i32.store))
+            (export \"i32_store\" (func $i32_store)))
+        ")?;
+        let mut runtime = Runtime::instantiate(wasm)?;
+        runtime.call("i32_store", vec![])?;
+        let memory = &runtime.store.memories[0].data;
+        assert_eq!(memory[0], 42);
         Ok(())
     }
 }

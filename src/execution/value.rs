@@ -16,6 +16,24 @@ impl From<i64> for Value {
     }
 }
 
+impl From<Value> for i32 {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::I32(value) => value,
+            _ => panic!("type mismatch"),
+        }
+    }
+}
+
+impl From<Value> for i64 {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::I64(value) => value,
+            _ => panic!("type mismatch"),
+        }
+    }
+}
+
 /// Adds two same-type numbers
 /// 
 /// # Example

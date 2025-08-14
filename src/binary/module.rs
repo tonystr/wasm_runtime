@@ -1,4 +1,4 @@
-use crate::binary::types::{Import, ImportDesc, Limits, Memory};
+use crate::binary::types::{Import, ImportDesc, Limits, Memory, Data};
 
 use super::{
     instruction::Instruction,
@@ -21,6 +21,7 @@ pub struct Module {
     pub magic: String,
     pub version: u32,
     pub memory_section: Option<Vec<Memory>>,
+    pub data_section: Option<Vec<Data>>,
     pub type_section: Option<Vec<FuncType>>,    // List of signatures
     pub function_section: Option<Vec<u32>>,     // List of signature ids
     pub code_section: Option<Vec<Function>>,
@@ -34,6 +35,7 @@ impl Default for Module {
             magic: "\0asm".to_string(),
             version: 1,
             memory_section: None,
+            data_section: None,
             type_section: None,
             function_section: None,
             code_section: None,
@@ -76,6 +78,10 @@ impl Module {
                             let (_, memory) = decode_memory_section(section_contents)?;
                             module.memory_section = Some(vec![memory]);
                         }
+                        SectionCode::Data => {
+                            let (_, data) = decode_data_section(section_contents)?;
+                            module.data_section = Some(data);
+                        }
                         SectionCode::Type => {
                             let (_, types) = decode_type_section(section_contents)?;
                             module.type_section = Some(types);
@@ -96,7 +102,6 @@ impl Module {
                             let (_, imports) = decode_import_section(section_contents)?;
                             module.import_section = Some(imports);
                         }
-                        _ => todo!(),
                     };
 
                     remaining = rest;
@@ -304,6 +309,32 @@ fn decode_limits(input: &[u8]) -> IResult<&[u8], Limits> {
     Ok((input, Limits { min, max }))
 }
 
+fn decode_expr(input: &[u8]) -> IResult<&[u8], u32> {
+    let (input, _) = leb128_u32(input)?;        // i32.const
+    let (input, offset) = leb128_u32(input)?;   // i32 literal
+    let (input, _) = leb128_u32(input)?;        // end
+    Ok((input, offset))
+}
+
+fn decode_data_section(input: &[u8]) -> IResult<&[u8], Vec<Data>> {
+    let (mut input, count) = leb128_u32(input)?;
+    let mut data = vec![];
+    for _ in 0..count {
+        let (rest, memory_index) = leb128_u32(input)?;     // flags
+        let (rest, offset) = decode_expr(rest)?;
+        let (rest, size) = leb128_u32(rest)?;
+        let (rest, init) = take(size)(rest)?;
+        data.push(Data {
+            memory_index,
+            offset,
+            init: init.into()
+        });
+        input = rest;
+    }
+
+    Ok((input, data))
+}
+
 /// # Decode "name" `string`
 /// * (1) Decode `length` leb128 u32 number  
 /// * (2) Decode `name` utf8 string, `length` bytes long  
@@ -322,7 +353,7 @@ mod tests {
         instruction::Instruction,
         module::Module,
         section::Function,
-        types::{Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory, ValueType},
+        types::{Data, Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory, ValueType},
     };
     use anyhow::Result;
 
@@ -491,12 +522,12 @@ mod tests {
 
     #[test]
     fn decode_import_section() -> Result<()> {
-        let wasm = wat::parse_str("(module
-            (func $add (import \"env\" \"add\") (param i32) (result i32))
-            (func (export \"call_add\") (param i32) (result i32)
+        let wasm = wat::parse_str(r#"(module
+            (func $add (import "env" "add") (param i32) (result i32))
+            (func (export "call_add") (param i32) (result i32)
                 (local.get 0)
                 (call $add)))
-        ")?;
+        "#)?;
         let module = Module::new(&wasm)?;
         assert_eq!(
             module,
@@ -570,6 +601,50 @@ mod tests {
                 memory_section: Some(vec![Memory { limits }]),
                 ..Default::default()
             })
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn decode_data() -> Result<()> {
+        let tests = vec![
+            (
+                r#"(module (memory 1) (data (i32.const 0) "hello"))"#,
+                vec![Data {
+                    memory_index: 0,
+                    offset: 0,
+                    init: b"hello".to_vec(),
+                }]
+            ),
+            (
+                r#"(module (memory 1) (data (i32.const 0) "hello") (data (i32.const 5) "world"))"#,
+                vec![
+                    Data {
+                        memory_index: 0,
+                        offset: 0,
+                        init: b"hello".into(),
+                    },
+                    Data {
+                        memory_index: 0,
+                        offset: 5,
+                        init: b"world".into(),
+                    },
+                ]
+            )
+        ];
+
+        for (wasm, data) in tests {
+            let module = Module::new(&wat::parse_str(wasm)?)?;
+            assert_eq!(
+                module,
+                Module {
+                    memory_section: Some(vec![Memory {
+                        limits: Limits { min: 1, max: None },
+                    }]),
+                    data_section: Some(data),
+                    ..Default::default()
+                }
+            );
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-use crate::binary::types::{Import, ImportDesc};
+use crate::binary::types::{Import, ImportDesc, Limits, Memory};
 
 use super::{
     instruction::Instruction,
@@ -20,6 +20,7 @@ use num_traits::FromPrimitive as _;
 pub struct Module {
     pub magic: String,
     pub version: u32,
+    pub memory_section: Option<Vec<Memory>>,
     pub type_section: Option<Vec<FuncType>>,    // List of signatures
     pub function_section: Option<Vec<u32>>,     // List of signature ids
     pub code_section: Option<Vec<Function>>,
@@ -32,6 +33,7 @@ impl Default for Module {
         Self {
             magic: "\0asm".to_string(),
             version: 1,
+            memory_section: None,
             type_section: None,
             function_section: None,
             code_section: None,
@@ -69,6 +71,10 @@ impl Module {
                     match code {
                         SectionCode::Custom => {
                             // skip
+                        }
+                        SectionCode::Memory => {
+                            let (_, memory) = decode_memory_section(section_contents)?;
+                            module.memory_section = Some(vec![memory]);
                         }
                         SectionCode::Type => {
                             let (_, types) = decode_type_section(section_contents)?;
@@ -278,6 +284,26 @@ fn decode_import_section(input: &[u8]) -> IResult<&[u8], Vec<Import>> {
     Ok((input, imports))
 }
 
+fn decode_memory_section(input: &[u8]) -> IResult<&[u8], Memory> {
+    // discard count, as version 1 only supports 1 memory per memory section
+    let (input, _count) = leb128_u32(input)?;
+    let (_, limits) = decode_limits(input)?;
+    Ok((&[], Memory { limits }))
+}
+
+fn decode_limits(input: &[u8]) -> IResult<&[u8], Limits> {
+    let (mut input, (flags, min)) = pair(leb128_u32, leb128_u32)(input)?;
+    let max = if flags == 0 {
+        None
+    } else {
+        let (rest, max) = leb128_u32(input)?;
+        input = rest;
+        Some(max)
+    };
+
+    Ok((input, Limits { min, max }))
+}
+
 /// # Decode "name" `string`
 /// * (1) Decode `length` leb128 u32 number  
 /// * (2) Decode `name` utf8 string, `length` bytes long  
@@ -296,7 +322,7 @@ mod tests {
         instruction::Instruction,
         module::Module,
         section::Function,
-        types::{Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, ValueType},
+        types::{Export, ExportDesc, FuncType, FunctionLocal, Import, ImportDesc, Limits, Memory, ValueType},
     };
     use anyhow::Result;
 
@@ -523,6 +549,28 @@ mod tests {
                 ..Default::default()
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn decode_memory() -> Result<()> {
+        let tests = vec![
+            ("(module (memory 1))", Limits { min: 1, max: None }),
+            (
+                "(module (memory 1 2))",
+                Limits {
+                    min: 1,
+                    max: Some(2)
+                }
+            )
+        ];
+        for (wasm, limits) in tests {
+            let module = Module::new(&wat::parse_str(wasm)?)?;
+            assert_eq!(module, Module {
+                memory_section: Some(vec![Memory { limits }]),
+                ..Default::default()
+            })
+        }
         Ok(())
     }
 }

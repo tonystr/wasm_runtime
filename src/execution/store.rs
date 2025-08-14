@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-
 use crate::binary::{
     instruction::Instruction,
     module::Module,
     types::{ExportDesc, FuncType, ImportDesc, ValueType},
 };
 use anyhow::{bail, Result};
+
+pub const PAGE_SIZE: u32 = 65536; // 64KiB
 
 #[derive(Clone)]
 pub struct Func {
@@ -45,10 +46,16 @@ pub struct ModuleInst {
     pub exports: HashMap<String, ExportInst>,
 }
 
+pub struct MemoryInst {
+    pub data: Vec<u8>,
+    pub max: Option<u32>,
+}
+
 #[derive(Default)]
 pub struct Store {
     pub funcs: Vec<FuncInst>,
     pub module: ModuleInst,
+    pub memories: Vec<MemoryInst>,
 }
 
 impl Store {
@@ -59,6 +66,7 @@ impl Store {
         };
 
         let mut funcs: Vec<FuncInst> = vec![];
+        let mut memories: Vec<MemoryInst> = vec![];
 
         // Collect external functions
         if let Some(ref import_section) = module.import_section {
@@ -123,9 +131,20 @@ impl Store {
                 module_inst.exports.insert(export.name.clone(), export_inst);
             }
         }
+
+        if let Some(ref sections) = module.memory_section {
+            for memory in sections {
+                let min = memory.limits.min * PAGE_SIZE;
+                memories.push(MemoryInst {
+                    data: vec![0; min as usize],
+                    max: memory.limits.max,
+                });
+            }
+        }
         
         Ok(Self {
             funcs,
+            memories,
             module: module_inst,
         })
     }
